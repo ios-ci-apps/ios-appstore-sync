@@ -1,0 +1,100 @@
+{
+  "schemaVersion": 1,
+  "bundleId": "com.example.focuscanvas",
+  "version": "1.0.0",
+  "primaryLocale": "en-US",
+  "copyright": "2026 Example Studio",
+  "categories": {
+    "primary": "PRODUCTIVITY",
+    "secondary": "UTILITIES"
+  },
+  "localizations": {
+    "en-US": {
+      "name": "Focus Canvas",
+      "subtitle": "Calm notes & daily tasks",
+      "promotionalText": "Organize your day offline with zero accounts and zero distractions.",
+      "description": "Focus Canvas helps you plan your day and keep private notes entirely on your iPhone.\n\nHighlights:\n- Offline-first storage with zero tracking\n- Clean daily agenda and quick capture\n- Optional tip jar to support independent development",
+      "keywords": "planner,agenda,journal,offline,checklist,minimal",
+      "supportUrl": "https://example.com/support",
+      "marketingUrl": "https://example.com/focus-canvas",
+      "privacyPolicyUrl": "https://example.com/privacy"
+    },
+    "zh-Hant": {
+      "name": "專注畫布",
+      "subtitle": "離線筆記與每日清單",
+      "promotionalText": "免註冊、無干擾，在手機上安心整理每一天的節奏。",
+      "description": "專注畫布協助你在 iPhone 上完全離線管理日常任務與私人筆記。\n\n特色功能：\n- 全程本機儲存，無追蹤分析\n- 簡潔清晰的每日行程與快速記錄\n- 可選小費贊助，支持獨立開發",
+      "keywords": "行事曆,待辦,記事本,計畫,極簡,效率,時間管理",
+      "supportUrl": "https://example.com/zh-hant/support",
+      "marketingUrl": "https://example.com/zh-hant/focus-canvas",
+      "privacyPolicyUrl": "https://example.com/zh-hant/privacy"
+    }
+  },
+  "availability": {
+    "availableInNewTerritories": true,
+    "territories": ["USA", "AUS", "TWN"]
+  },
+  "reviewDetail": {
+    "contactFirstName": "Alex",
+    "contactLastName": "Rivera",
+    "contactPhone": "+1 555 0100",
+    "contactEmail": "review@example.com",
+    "demoAccountRequired": false,
+    "notes": "No account is required. Optional tip jar items appear under Settings > Support."
+  },
+  "appPricing": {
+    "baseTerritory": "USA",
+    "basePrice": "0"
+  },
+  "inAppPurchases": [
+    {
+      "productId": "com.example.focuscanvas.tip.small",
+      "referenceName": "Small Tip",
+      "type": "CONSUMABLE",
+      "reviewNote": "Optional tip jar button in Settings > Support.",
+      "pricing": {
+        "baseTerritory": "USA",
+        "price": "2.99"
+      },
+      "localizations": {
+        "en-US": {
+          "name": "Small Tip",
+          "description": "A small thank-you tip to support independent updates."
+        },
+        "zh-Hant": {
+          "name": "小額贊助",
+          "description": "請開發者喝杯茶，支持持續維護與更新。"
+        }
+      }
+    },
+    {
+      "productId": "com.example.focuscanvas.tip.large",
+      "referenceName": "Large Tip",
+      "type": "CONSUMABLE",
+      "reviewNote": "Optional tip jar button in Settings > Support.",
+      "pricing": {
+        "baseTerritory": "USA",
+        "price": "9.99"
+      },
+      "localizations": {
+        "en-US": {
+          "name": "Large Tip",
+          "description": "A generous tip to help keep the app independent."
+        },
+        "zh-Hant": {
+          "name": "大額贊助",
+          "description": "慷慨支持獨立開發與未來的無廣告更新。"
+        }
+      }
+    }
+  ],
+  "subscriptionGroups": [],
+  "validation": {
+    "storekitConfigPath": "sample.storekit",
+    "forbiddenPatterns": [
+      "\\bTODO\\b",
+      "\\bFIXME\\b",
+      "\\bLorem ipsum\\b"
+    ]
+  }
+}

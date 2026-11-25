@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "bundleId": "com.example.vectorsketch",
+  "version": "2.0.0",
+  "primaryLocale": "en-US",
+  "copyright": "2026 Example Craft",
+  "categories": {
+    "primary": "GRAPHICS_AND_DESIGN"
+  },
+  "localizations": {
+    "en-US": {
+      "name": "Vector Sketch",
+      "subtitle": "Clean SVG & pen tool",
+      "promotionalText": "Try every drawing tool free and unlock unlimited SVG export with one purchase.",
+      "description": "Vector Sketch brings crisp Bezier drawing to iPhone. Free to explore, with a single non-consumable Pro unlock for unlimited vector exports.",
+      "keywords": "bezier,illustration,drawing,design,icons,export",
+      "supportUrl": "https://example.com/vectorsketch/support",
+      "privacyPolicyUrl": "https://example.com/vectorsketch/privacy"
+    }
+  },
+  "appPricing": {
+    "baseTerritory": "USA",
+    "basePrice": "0"
+  },
+  "inAppPurchases": [
+    {
+      "productId": "com.example.vectorsketch.pro",
+      "referenceName": "Pro Unlock",
+      "type": "NON_CONSUMABLE",
+      "reviewNote": "Tap Export > Unlock Pro on any canvas to test the one-time unlock.",
+      "pricing": {
+        "baseTerritory": "USA",
+        "price": "14.99"
+      },
+      "localizations": {
+        "en-US": {
+          "name": "Pro Unlock",
+          "description": "One-time purchase for unlimited SVG and PDF export."
+        }
+      }
+    }
+  ],
+  "subscriptionGroups": []
+}

@@ -1,0 +1,124 @@
+name: iOS App Store Sync
+description: Validate metadata, render brand-framed screenshots, and idempotently sync App Store Connect version drafts and optional app-level settings on Linux.
+
+inputs:
+  mode:
+    description: Operation mode ("validate", "sync", or "frame").
+    required: true
+    default: "validate"
+  metadata-path:
+    description: Path to declarative metadata.json (required for "validate" and "sync").
+    default: ""
+  screenshots-config-path:
+    description: Path to declarative screenshots.json theme config (required for "frame").
+    default: ""
+  raw-screenshots-dir:
+    description: Directory containing raw simulator PNGs (required for "frame").
+    default: ""
+  output-dir:
+    description: Output directory for framed PNGs and contact sheets (used by "frame" and optionally "sync").
+    default: ""
+  dry-run:
+    description: When "true" (default), sync performs read-only diffing and issues zero mutating API requests.
+    default: "true"
+  sync-availability:
+    description: Set to "true" to sync appAvailabilities v2 (app-level, immediate effect on live apps) when availability is configured.
+    default: "false"
+  sync-pricing:
+    description: Set to "true" to sync appPriceSchedules (app-level, immediate effect on live apps) when appPricing is configured.
+    default: "false"
+  sync-iap:
+    description: Set to "true" to sync inAppPurchases v2, localizations, and price schedules (IAP pricing is immediate on live apps).
+    default: "false"
+  sync-screenshots:
+    description: Set to "true" to upload framed app screenshots and IAP review screenshots to the editable draft version.
+    default: "false"
+  allow-live-changes:
+    description: Set to "true" to confirm immediate app-level mutations (availability, app pricing, IAP pricing) when the app already has a live/released version.
+    default: "false"
+  screenshot-display-type:
+    description: Optional ASC screenshotDisplayType override (e.g. APP_IPHONE_69 or APP_IPHONE_67).
+    default: ""
+  api-key-id:
+    description: App Store Connect API Key ID (required for mode "sync").
+    default: ""
+  api-issuer-id:
+    description: App Store Connect API Issuer ID (required for mode "sync").
+    default: ""
+  api-private-key:
+    description: Contents of the App Store Connect .p8 private key (pass from an environment secret).
+    default: ""
+  api-key-path:
+    description: Path to the .p8 file on the runner, when kept on disk instead of in a secret.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python environment
+      shell: bash
+      run: |
+        set -euo pipefail
+        venv_dir="${RUNNER_TEMP:-/tmp}/ios-appstore-sync-venv"
+        if [[ ! -x "$venv_dir/bin/ios-appstore-sync" ]]; then
+          python3 -m venv "$venv_dir"
+          "$venv_dir/bin/pip" install --quiet --upgrade pip
+          "$venv_dir/bin/pip" install --quiet "$GITHUB_ACTION_PATH"
+        fi
+
+    - name: Run ios-appstore-sync
+      shell: bash
+      env:
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_METADATA_PATH: ${{ inputs.metadata-path }}
+        INPUT_SCREENSHOTS_CONFIG_PATH: ${{ inputs.screenshots-config-path }}
+        INPUT_RAW_SCREENSHOTS_DIR: ${{ inputs.raw-screenshots-dir }}
+        INPUT_OUTPUT_DIR: ${{ inputs.output-dir }}
+        INPUT_DRY_RUN: ${{ inputs.dry-run }}
+        INPUT_SYNC_AVAILABILITY: ${{ inputs.sync-availability }}
+        INPUT_SYNC_PRICING: ${{ inputs.sync-pricing }}
+        INPUT_SYNC_IAP: ${{ inputs.sync-iap }}
+        INPUT_SYNC_SCREENSHOTS: ${{ inputs.sync-screenshots }}
+        INPUT_ALLOW_LIVE_CHANGES: ${{ inputs.allow-live-changes }}
+        INPUT_SCREENSHOT_DISPLAY_TYPE: ${{ inputs.screenshot-display-type }}
+        ASC_KEY_ID: ${{ inputs.api-key-id }}
+        ASC_ISSUER_ID: ${{ inputs.api-issuer-id }}
+        ASC_PRIVATE_KEY: ${{ inputs.api-private-key }}
+        ASC_KEY_PATH: ${{ inputs.api-key-path }}
+      run: |
+        set -euo pipefail
+        cli="${RUNNER_TEMP:-/tmp}/ios-appstore-sync-venv/bin/ios-appstore-sync"
+
+        case "$INPUT_MODE" in
+          validate)
+            unset ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY ASC_KEY_PATH
+            [[ -n "$INPUT_METADATA_PATH" ]] || { echo "::error::metadata-path is required for mode 'validate'"; exit 1; }
+            "$cli" validate --metadata "$INPUT_METADATA_PATH"
+            ;;
+          frame)
+            unset ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY ASC_KEY_PATH
+            [[ -n "$INPUT_SCREENSHOTS_CONFIG_PATH" ]] || { echo "::error::screenshots-config-path is required for mode 'frame'"; exit 1; }
+            [[ -n "$INPUT_RAW_SCREENSHOTS_DIR" ]] || { echo "::error::raw-screenshots-dir is required for mode 'frame'"; exit 1; }
+            [[ -n "$INPUT_OUTPUT_DIR" ]] || { echo "::error::output-dir is required for mode 'frame'"; exit 1; }
+            "$cli" frame \
+              --config "$INPUT_SCREENSHOTS_CONFIG_PATH" \
+              --raw-dir "$INPUT_RAW_SCREENSHOTS_DIR" \
+              --output-dir "$INPUT_OUTPUT_DIR"
+            ;;
+          sync)
+            [[ -n "$INPUT_METADATA_PATH" ]] || { echo "::error::metadata-path is required for mode 'sync'"; exit 1; }
+            args=(--metadata "$INPUT_METADATA_PATH" --dry-run "$INPUT_DRY_RUN")
+            [[ "${INPUT_SYNC_AVAILABILITY,,}" == "true" ]] && args+=(--sync-availability)
+            [[ "${INPUT_SYNC_PRICING,,}" == "true" ]] && args+=(--sync-pricing)
+            [[ "${INPUT_SYNC_IAP,,}" == "true" ]] && args+=(--sync-iap)
+            [[ "${INPUT_SYNC_SCREENSHOTS,,}" == "true" ]] && args+=(--sync-screenshots)
+            [[ "${INPUT_ALLOW_LIVE_CHANGES,,}" == "true" ]] && args+=(--allow-live-changes)
+            [[ -n "$INPUT_OUTPUT_DIR" ]] && args+=(--screenshots-dir "$INPUT_OUTPUT_DIR")
+            [[ -n "$INPUT_SCREENSHOT_DISPLAY_TYPE" ]] && args+=(--screenshot-display-type "$INPUT_SCREENSHOT_DISPLAY_TYPE")
+            "$cli" sync "${args[@]}"
+            ;;
+          *)
+            echo "::error::Unsupported mode '$INPUT_MODE'. Expected 'validate', 'frame', or 'sync'."
+            exit 1
+            ;;
+        esac

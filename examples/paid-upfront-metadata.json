@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "bundleId": "com.example.fieldmeter",
+  "version": "1.2.0",
+  "primaryLocale": "en-US",
+  "copyright": "2026 Example Instruments",
+  "categories": {
+    "primary": "PHOTO_AND_VIDEO",
+    "secondary": "UTILITIES"
+  },
+  "localizations": {
+    "en-US": {
+      "name": "Field Light Meter",
+      "subtitle": "Incident & spot exposure",
+      "promotionalText": "Pay once and own every film stock calibration offline forever.",
+      "description": "Field Light Meter is a precision exposure companion for analog photographers. No subscriptions, no ads, and no cloud accounts.",
+      "keywords": "analog,film,camera,photography,iso,shutter,aperture",
+      "supportUrl": "https://example.com/fieldmeter/support",
+      "privacyPolicyUrl": "https://example.com/fieldmeter/privacy"
+    }
+  },
+  "availability": {
+    "availableInNewTerritories": true,
+    "territories": ["USA", "AUS", "GBR", "JPN"]
+  },
+  "appPricing": {
+    "baseTerritory": "USA",
+    "basePrice": "4.99"
+  },
+  "inAppPurchases": [],
+  "subscriptionGroups": []
+}
