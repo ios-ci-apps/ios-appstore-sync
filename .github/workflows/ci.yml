@@ -39,6 +39,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
+      - name: Lint with ruff
+        run: ruff check src tests
+
       - name: Verify YAML files parse
         run: |
           python -c "import yaml; [yaml.safe_load(open(f, encoding='utf-8')) for f in ('action.yml', 'examples/appstore-sync.yml', '.github/workflows/ci.yml')]"

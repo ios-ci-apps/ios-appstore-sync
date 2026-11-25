@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import html
 import json
-from pathlib import Path
 import shutil
 import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
-
 
 DEFAULT_CANVAS_WIDTH = 1320
 DEFAULT_CANVAS_HEIGHT = 2868
@@ -659,7 +658,12 @@ def _build_contact_sheet_html(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>App Store Screenshot Contact Sheet</title>
 <style>
-  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 24px; background: #f5f5f7; color: #1d1d1f; }}
+  body {{
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin: 24px;
+    background: #f5f5f7;
+    color: #1d1d1f;
+  }}
   h1 {{ margin-bottom: 4px; }}
   p.lead {{ color: #6e6e73; margin-top: 0; }}
   h2 {{ margin-top: 32px; border-bottom: 1px solid #d2d2d7; padding-bottom: 6px; }}
@@ -675,7 +679,10 @@ def _build_contact_sheet_html(
 </head>
 <body>
   <h1>App Store Screenshot Contact Sheet</h1>
-  <p class="lead">Review framed opaque RGB outputs before running <code>sync --sync-screenshots --dry-run false</code>.</p>
+  <p class="lead">
+    Review framed opaque RGB outputs before running
+    <code>sync --sync-screenshots --dry-run false</code>.
+  </p>
   {''.join(sections)}
 </body>
 </html>

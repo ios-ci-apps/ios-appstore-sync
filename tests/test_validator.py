@@ -11,7 +11,6 @@ import pytest
 from ios_appstore_sync.cli import main as cli_main
 from ios_appstore_sync.validator import validate_metadata_dict, validate_metadata_file
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES_DIR = REPO_ROOT / "examples"
 

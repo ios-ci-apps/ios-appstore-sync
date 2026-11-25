@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from dataclasses import dataclass
 import json
 import os
-from pathlib import Path
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin, urlparse
@@ -15,13 +15,13 @@ from urllib.request import Request, urlopen
 
 import jwt
 
-
 DEFAULT_BASE_URL = "https://api.appstoreconnect.apple.com"
 _FORBIDDEN_SUBMISSION_SEGMENTS = (
     "reviewsubmissions",
     "appstoreversionsubmissions",
 )
-_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+_SERVER_ERROR_RETRY_CODES = frozenset({500, 502, 503, 504})
+_IDEMPOTENT_METHODS = frozenset({"GET", "PUT", "DELETE"})
 _MUTATING_METHODS = frozenset({"POST", "PATCH", "PUT", "DELETE"})
 
 
@@ -29,8 +29,12 @@ class ASCError(RuntimeError):
     """Base error for App Store Connect client failures."""
 
 
+class ASCTransportError(ASCError):
+    """Raised on network or timeout transport errors communicating with ASC."""
+
+
 class ASCSafetyError(ASCError):
-    """Raised when a forbidden endpoint (e.g. submission) is attempted."""
+    """Raised when a forbidden endpoint or disallowed redirect/pagination host is attempted."""
 
 
 class ASCReadOnlyError(ASCError):
@@ -80,8 +84,10 @@ def urllib_transport(
         resp_headers = {k.lower(): v for k, v in exc.headers.items()} if exc.headers else {}
         err_body = exc.read() if exc.fp is not None else b""
         return HTTPResponse(status=exc.code, headers=resp_headers, body=err_body)
+    except TimeoutError as exc:
+        raise ASCTransportError(f"Request timed out during {method} {url}: {exc}") from exc
     except URLError as exc:
-        raise ASCError(f"Network error during {method} {url}: {exc.reason}") from exc
+        raise ASCTransportError(f"Network error during {method} {url}: {exc.reason}") from exc
 
 
 def format_asc_error_body(body: bytes) -> str:
@@ -218,6 +224,7 @@ class ASCClient:
     ) -> None:
         self._auth = auth
         self._base_url = base_url.rstrip("/")
+        self._allowed_api_host = (urlparse(self._base_url).hostname or "").lower()
         self.read_only = read_only
         self._timeout = timeout
         self._max_retries = max_retries
@@ -226,7 +233,7 @@ class ASCClient:
         self._sleep = sleep_fn
 
     def _build_url(self, path_or_url: str, params: dict[str, Any] | None = None) -> str:
-        if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
+        if path_or_url.startswith(("http://", "https://")):
             url = path_or_url
         else:
             url = urljoin(f"{self._base_url}/", path_or_url.lstrip("/"))
@@ -236,6 +243,27 @@ class ASCClient:
                 sep = "&" if "?" in url else "?"
                 url = f"{url}{sep}{query}"
         return url
+
+    def _validate_pagination_url(self, next_url: str) -> None:
+        parsed = urlparse(next_url)
+        hostname = (parsed.hostname or "").lower()
+        if (
+            parsed.scheme != "https"
+            or parsed.username is not None
+            or parsed.password is not None
+            or not hostname
+            or hostname != self._allowed_api_host
+        ):
+            raise ASCSafetyError(
+                f"Refused to follow pagination links.next URL with disallowed scheme or host: "
+                f"{next_url!r} (allowed: https://{self._allowed_api_host})."
+            )
+
+    @staticmethod
+    def _should_retry_status(method: str, status: int) -> bool:
+        if status == 429:
+            return True
+        return status in _SERVER_ERROR_RETRY_CODES and method in _IDEMPOTENT_METHODS
 
     def _enforce_guardrails(self, method: str, url: str) -> None:
         method_upper = method.upper()
@@ -286,7 +314,15 @@ class ASCClient:
             if body_bytes is not None:
                 headers["Content-Type"] = "application/json"
 
-            resp = self._transport(method_upper, url, headers, body_bytes, self._timeout)
+            try:
+                resp = self._transport(method_upper, url, headers, body_bytes, self._timeout)
+            except (ASCTransportError, URLError, TimeoutError) as exc:
+                if method_upper in _IDEMPOTENT_METHODS and attempt < self._max_retries:
+                    self._sleep(self._retry_delay(attempt, {}))
+                    continue
+                if isinstance(exc, ASCError):
+                    raise
+                raise ASCTransportError(f"Transport error during {method_upper} {url}: {exc}") from exc
 
             if resp.status == 404 and allow_404:
                 return None
@@ -296,7 +332,7 @@ class ASCClient:
                     return {}
                 return resp.json()
 
-            if resp.status in _RETRYABLE_STATUS_CODES and attempt < self._max_retries:
+            if self._should_retry_status(method_upper, resp.status) and attempt < self._max_retries:
                 self._sleep(self._retry_delay(attempt, resp.headers))
                 continue
 
@@ -334,6 +370,7 @@ class ASCClient:
         path: str,
         *,
         params: dict[str, Any] | None = None,
+        included_out: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """Paginate through an App Store Connect collection endpoint."""
         items: list[dict[str, Any]] = []
@@ -347,8 +384,18 @@ class ASCClient:
                 items.extend(data)
             elif isinstance(data, dict):
                 items.append(data)
+            if included_out is not None:
+                included = page.get("included")
+                if isinstance(included, list):
+                    included_out.extend(included)
             links = page.get("links") or {}
-            next_url = links.get("next") if isinstance(links, dict) else None
+            raw_next = links.get("next") if isinstance(links, dict) else None
+            if raw_next:
+                next_str = str(raw_next)
+                self._validate_pagination_url(next_str)
+                next_url = next_str
+            else:
+                next_url = None
             next_params = None
 
         return items
@@ -369,10 +416,19 @@ class ASCClient:
         self._enforce_guardrails(method_upper, url)
 
         for attempt in range(self._max_retries + 1):
-            resp = self._transport(method_upper, url, dict(headers), data, self._timeout)
+            try:
+                resp = self._transport(method_upper, url, dict(headers), data, self._timeout)
+            except (ASCTransportError, URLError, TimeoutError) as exc:
+                if method_upper in _IDEMPOTENT_METHODS and attempt < self._max_retries:
+                    self._sleep(self._retry_delay(attempt, {}))
+                    continue
+                if isinstance(exc, ASCError):
+                    raise
+                raise ASCTransportError(f"Transport error during {method_upper} {url}: {exc}") from exc
+
             if 200 <= resp.status < 300:
                 return
-            if resp.status in _RETRYABLE_STATUS_CODES and attempt < self._max_retries:
+            if self._should_retry_status(method_upper, resp.status) and attempt < self._max_retries:
                 self._sleep(self._retry_delay(attempt, resp.headers))
                 continue
             raise ASCAPIError(

@@ -11,16 +11,24 @@ on:
         description: "Dry run (read-only diff, zero API mutations)"
         type: boolean
         default: true
+      sync_availability:
+        description: "Sync app availability (app-level, immediate effect)"
+        type: boolean
+        default: false
       sync_pricing:
-        description: "Sync app price schedule"
+        description: "Sync app price schedule (app-level, immediate effect)"
         type: boolean
         default: false
       sync_iap:
-        description: "Sync in-app purchases"
+        description: "Sync in-app purchases (IAP pricing takes effect immediately)"
         type: boolean
         default: false
       sync_screenshots:
         description: "Upload framed app & IAP review screenshots"
+        type: boolean
+        default: false
+      allow_live_changes:
+        description: "Allow immediate app-level changes (availability/pricing) on a live app"
         type: boolean
         default: false
 
@@ -80,10 +88,11 @@ jobs:
           metadata-path: appstore/metadata.json
           output-dir: appstore/framed-screenshots
           dry-run: ${{ inputs.dry_run }}
-          sync-availability: "true"
+          sync-availability: ${{ inputs.sync_availability }}
           sync-pricing: ${{ inputs.sync_pricing }}
           sync-iap: ${{ inputs.sync_iap }}
           sync-screenshots: ${{ inputs.sync_screenshots }}
+          allow-live-changes: ${{ inputs.allow_live_changes }}
           api-key-id: ${{ vars.ASC_KEY_ID }}
           api-issuer-id: ${{ vars.ASC_ISSUER_ID }}
           api-private-key: ${{ secrets.ASC_PRIVATE_KEY }}

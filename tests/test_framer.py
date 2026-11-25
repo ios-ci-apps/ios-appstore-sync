@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PIL import Image
 import pytest
+from PIL import Image
 
 from ios_appstore_sync.cli import main as cli_main
 from ios_appstore_sync.framer import (

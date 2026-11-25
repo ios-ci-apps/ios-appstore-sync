@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
-import json
 from pathlib import Path
-import re
 from typing import Any
 from urllib.parse import urlparse
 
@@ -17,7 +17,6 @@ from ios_appstore_sync.schema import (
     load_raw_json,
     parse_metadata,
 )
-
 
 LIMIT_APP_NAME_CHARS = 30
 LIMIT_SUBTITLE_CHARS = 30
@@ -143,9 +142,11 @@ def _check_keywords(
         if not kw:
             continue
         kw_cf = kw.casefold()
-        if kw_cf in title_tokens or (len(kw_cf) >= 2 and kw_cf in title_compact and not kw_cf.isascii()):
-            if kw not in seen_overlaps:
-                seen_overlaps.append(kw)
+        is_overlap = kw_cf in title_tokens or (
+            len(kw_cf) >= 2 and kw_cf in title_compact and not kw_cf.isascii()
+        )
+        if is_overlap and kw not in seen_overlaps:
+            seen_overlaps.append(kw)
     if seen_overlaps:
         result.add_warning(
             path,
@@ -308,12 +309,15 @@ def validate_metadata_dict(
 
             for url_field in ("supportUrl", "marketingUrl", "privacyPolicyUrl"):
                 url_val = entry.get(url_field)
-                if url_val is not None and url_val != "":
-                    if not isinstance(url_val, str) or not _is_valid_https_url(url_val):
-                        result.add_error(
-                            f"{prefix}.{url_field}",
-                            f"must be a valid https:// URL (got {url_val!r}).",
-                        )
+                if (
+                    url_val is not None
+                    and url_val != ""
+                    and (not isinstance(url_val, str) or not _is_valid_https_url(url_val))
+                ):
+                    result.add_error(
+                        f"{prefix}.{url_field}",
+                        f"must be a valid https:// URL (got {url_val!r}).",
+                    )
 
     # 4. Availability (optional)
     availability = raw.get("availability")

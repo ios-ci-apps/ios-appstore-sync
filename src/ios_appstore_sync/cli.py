@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
+import json
 import sys
-from typing import Sequence
+from collections.abc import Sequence
+from pathlib import Path
 
 from ios_appstore_sync.asc_client import ASCAuth, ASCClient, ASCError
 from ios_appstore_sync.framer import FramingError, frame_screenshots
@@ -25,7 +26,7 @@ def _parse_bool_flag(value: str) -> bool:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ios-appstore-sync",
-        description="Validate, frame screenshots, and idempotently sync App Store Connect drafts.",
+        description="Validate, frame screenshots, and idempotently sync App Store Connect drafts and app settings.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -43,7 +44,10 @@ def build_parser() -> argparse.ArgumentParser:
     # sync
     p_sync = subparsers.add_parser(
         "sync",
-        help="Sync validated metadata.json (and optional screenshots) to an editable ASC draft.",
+        help=(
+            "Sync validated metadata.json (and optional screenshots) to an editable ASC version draft "
+            "and optional immediate app-level settings."
+        ),
     )
     p_sync.add_argument(
         "--metadata",
@@ -60,25 +64,34 @@ def build_parser() -> argparse.ArgumentParser:
         "--sync-availability",
         action="store_true",
         default=False,
-        help="Enable syncing appAvailabilities v2 when availability is configured.",
+        help="Enable syncing appAvailabilities v2 (app-level, immediate effect) when availability is configured.",
     )
     p_sync.add_argument(
         "--sync-pricing",
         action="store_true",
         default=False,
-        help="Enable syncing appPriceSchedules when appPricing is configured.",
+        help="Enable syncing appPriceSchedules (app-level, immediate effect) when appPricing is configured.",
     )
     p_sync.add_argument(
         "--sync-iap",
         action="store_true",
         default=False,
-        help="Enable syncing inAppPurchases v2, localizations, and price schedules.",
+        help="Enable syncing inAppPurchases v2, localizations, and price schedules (IAP pricing is immediate).",
     )
     p_sync.add_argument(
         "--sync-screenshots",
         action="store_true",
         default=False,
         help="Enable syncing app screenshots and IAP review screenshots.",
+    )
+    p_sync.add_argument(
+        "--allow-live-changes",
+        action="store_true",
+        default=False,
+        help=(
+            "Confirm immediate app-level changes (app availability, app pricing, IAP pricing) "
+            "when the app already has a live/released version."
+        ),
     )
     p_sync.add_argument(
         "--screenshots-dir",
@@ -145,26 +158,23 @@ def _cmd_sync(args: argparse.Namespace) -> int:
         for warning in validation.warnings:
             print(warning.format(), file=sys.stderr)
 
-    try:
-        auth = ASCAuth.from_env(
-            key_id=args.api_key_id,
-            issuer_id=args.api_issuer_id,
-            key_path=args.api_key_path,
-        )
-        client = ASCClient(auth=auth, read_only=args.dry_run)
-        options = SyncOptions(
-            dry_run=args.dry_run,
-            sync_availability=args.sync_availability,
-            sync_pricing=args.sync_pricing,
-            sync_iap=args.sync_iap,
-            sync_screenshots=args.sync_screenshots,
-            screenshots_dir=Path(args.screenshots_dir) if args.screenshots_dir else None,
-            screenshot_display_type=args.screenshot_display_type,
-        )
-        report = sync_metadata(client, validation.config, options)
-    except ASCError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 1
+    auth = ASCAuth.from_env(
+        key_id=args.api_key_id,
+        issuer_id=args.api_issuer_id,
+        key_path=args.api_key_path,
+    )
+    client = ASCClient(auth=auth, read_only=args.dry_run)
+    options = SyncOptions(
+        dry_run=args.dry_run,
+        sync_availability=args.sync_availability,
+        sync_pricing=args.sync_pricing,
+        sync_iap=args.sync_iap,
+        sync_screenshots=args.sync_screenshots,
+        allow_live_changes=args.allow_live_changes,
+        screenshots_dir=Path(args.screenshots_dir) if args.screenshots_dir else None,
+        screenshot_display_type=args.screenshot_display_type,
+    )
+    report = sync_metadata(client, validation.config, options)
 
     markdown = report.format_markdown()
     print(markdown)
@@ -173,15 +183,11 @@ def _cmd_sync(args: argparse.Namespace) -> int:
 
 
 def _cmd_frame(args: argparse.Namespace) -> int:
-    try:
-        result = frame_screenshots(
-            config_path=args.config,
-            raw_dir=args.raw_dir,
-            output_dir=args.output_dir,
-        )
-    except FramingError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 1
+    result = frame_screenshots(
+        config_path=args.config,
+        raw_dir=args.raw_dir,
+        output_dir=args.output_dir,
+    )
 
     print(f"Framed {len(result.screenshots)} screenshot(s):")
     for shot in result.screenshots:
@@ -196,12 +202,19 @@ def _cmd_frame(args: argparse.Namespace) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command == "validate":
-        return _cmd_validate(args)
-    if args.command == "sync":
-        return _cmd_sync(args)
-    if args.command == "frame":
-        return _cmd_frame(args)
+    try:
+        if args.command == "validate":
+            return _cmd_validate(args)
+        if args.command == "sync":
+            return _cmd_sync(args)
+        if args.command == "frame":
+            return _cmd_frame(args)
+    except json.JSONDecodeError as exc:
+        print(f"ERROR: Invalid JSON: {exc}", file=sys.stderr)
+        return 1
+    except (ASCError, FramingError, OSError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     parser.error(f"Unknown command: {args.command}")
     return 2
 
