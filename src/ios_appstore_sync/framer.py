@@ -131,7 +131,7 @@ def load_screenshots_config(path: str | Path) -> ScreenshotsConfig:
         raise FramingError("screenshots.json must be a top-level JSON object.")
 
     schema_version = raw.get("schemaVersion", 1)
-    if schema_version != 1:
+    if isinstance(schema_version, bool) or schema_version != 1:
         raise FramingError(f"Unsupported screenshots.json schemaVersion: {schema_version!r} (expected 1).")
 
     canvas = raw.get("canvas") or {}
@@ -369,20 +369,61 @@ def _measure_width(draw: ImageDraw.ImageDraw, text: str, font: Any) -> float:
     return float(bbox[2] - bbox[0])
 
 
+def _is_cjk_char(ch: str) -> bool:
+    code = ord(ch)
+    return (
+        0x3000 <= code <= 0x303F
+        or 0x3040 <= code <= 0x30FF
+        or 0x3400 <= code <= 0x4DBF
+        or 0x4E00 <= code <= 0x9FFF
+        or 0xAC00 <= code <= 0xD7AF
+        or 0xF900 <= code <= 0xFAFF
+        or 0xFF00 <= code <= 0xFFEF
+    )
+
+
+def _tokenize_mixed_paragraph(para: str) -> list[tuple[str, bool]]:
+    """Split text into (token, preceded_by_space) pieces where CJK chars wrap individually."""
+    tokens: list[tuple[str, bool]] = []
+    buf: list[str] = []
+    pending_space = False
+
+    def flush_buf() -> None:
+        nonlocal pending_space
+        if buf:
+            tokens.append(("".join(buf), pending_space))
+            buf.clear()
+            pending_space = False
+
+    for ch in para:
+        if ch.isspace():
+            flush_buf()
+            pending_space = True
+        elif _is_cjk_char(ch):
+            flush_buf()
+            tokens.append((ch, pending_space))
+            pending_space = False
+        else:
+            buf.append(ch)
+    flush_buf()
+    return tokens
+
+
 def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: Any, max_width: int) -> list[str]:
-    """Wrap Latin and CJK text cleanly within max_width pixels."""
+    """Wrap Latin, CJK, and mixed CJK/Latin text cleanly within max_width pixels."""
     lines: list[str] = []
     for paragraph in text.splitlines():
         para = paragraph.strip()
         if not para:
             continue
-        if _contains_cjk(para) and " " not in para:
+        if _contains_cjk(para):
             current = ""
-            for ch in para:
-                trial = current + ch
+            for token, needs_space in _tokenize_mixed_paragraph(para):
+                sep = " " if (current and needs_space) else ""
+                trial = f"{current}{sep}{token}"
                 if current and _measure_width(draw, trial, font) > max_width:
                     lines.append(current)
-                    current = ch
+                    current = token
                 else:
                     current = trial
             if current:

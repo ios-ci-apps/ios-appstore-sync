@@ -161,3 +161,43 @@ def test_frame_cli_subcommand_and_path_traversal_guard(tmp_path: Path) -> None:
     )
     with pytest.raises(FramingError):
         frame_screenshots(config_path=bad_cfg, raw_dir=raw_dir, output_dir=out_dir)
+
+
+def test_wrap_text_mixed_cjk_and_latin_with_spaces() -> None:
+    from PIL import ImageDraw
+
+    from ios_appstore_sync.framer import ThemeFonts, _measure_width, _wrap_text, resolve_font
+
+    img = Image.new("RGB", (600, 200), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    font = resolve_font(
+        locale="zh-Hant",
+        text="支援 Apple Watch 手腕溫度與基礎體溫計",
+        size=44,
+        bold=True,
+        fonts=ThemeFonts(),
+    )
+    max_width = 420
+    lines = _wrap_text(draw, "支援 Apple Watch 手腕溫度與基礎體溫計", font, max_width)
+    assert len(lines) >= 2
+    assert "Apple" in " ".join(lines)
+    assert "Watch" in " ".join(lines)
+    for line in lines:
+        assert _measure_width(draw, line, font) <= max_width
+
+
+def test_load_screenshots_config_rejects_boolean_schema_version(tmp_path: Path) -> None:
+    from ios_appstore_sync.framer import load_screenshots_config
+
+    cfg = tmp_path / "bool-schema.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "schemaVersion": True,
+                "locales": {"en-US": [{"raw": "01.png", "headline": "Hi"}]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(FramingError, match="schemaVersion"):
+        load_screenshots_config(cfg)
