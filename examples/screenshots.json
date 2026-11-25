@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "displayType": "APP_IPHONE_69",
+  "canvas": {
+    "width": 1320,
+    "height": 2868
+  },
+  "theme": {
+    "backgroundColor": "#F7F3EE",
+    "gradientBottomColor": "#ECE3D6",
+    "accentColor": "#C46D5E",
+    "headlineColor": "#231F20",
+    "subheadlineColor": "#5E5654",
+    "bezelColor": "#1C1C1E",
+    "bezelStrokeColor": "#3A3A3C",
+    "cornerRadius": 120,
+    "bezelWidth": 28,
+    "shadowEnabled": true,
+    "fonts": {
+      "headline": "",
+      "subheadline": "",
+      "cjkHeadline": "",
+      "cjkSubheadline": ""
+    }
+  },
+  "webExport": {
+    "enabled": true,
+    "width": 660
+  },
+  "locales": {
+    "en-US": [
+      {
+        "raw": "01-home.png",
+        "output": "01-home.png",
+        "headline": "Your day, in calm focus",
+        "subheadline": "Private notes and daily rhythm, entirely on device."
+      },
+      {
+        "raw": "02-capture.png",
+        "output": "02-capture.png",
+        "headline": "Capture ideas in seconds",
+        "subheadline": "Zero accounts, zero trackers, instant search."
+      }
+    ],
+    "zh-Hant": [
+      {
+        "raw": "01-home.png",
+        "output": "01-home.png",
+        "headline": "專注每一天的節奏",
+        "subheadline": "完全離線保存，安心記錄你的日常靈感。"
+      },
+      {
+        "raw": "02-capture.png",
+        "output": "02-capture.png",
+        "headline": "數秒內捕捉想法",
+        "subheadline": "免帳號、零追蹤，隨時快速整理筆記。"
+      }
+    ]
+  }
+}

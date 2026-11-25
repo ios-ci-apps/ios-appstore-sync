@@ -57,6 +57,9 @@ class SyncOptions:
     sync_availability: bool = False
     sync_pricing: bool = False
     sync_iap: bool = False
+    sync_screenshots: bool = False
+    screenshots_dir: Path | None = None
+    screenshot_display_type: str | None = None
 
 
 @dataclass
@@ -982,10 +985,64 @@ def sync_metadata(
     _sync_categories(client, app_info, config, opts, report)
     _sync_app_info_localizations(client, app_info_id, config, opts, report)
 
-    _sync_version_localizations(client, version_id, config, opts, report)
+    version_loc_ids = _sync_version_localizations(client, version_id, config, opts, report)
     _sync_review_detail(client, version_id, config.review_detail, opts, report)
     _sync_availability(client, app_id, config.availability, opts, report)
     _sync_app_pricing(client, app_id, config.app_pricing, opts, report)
-    _sync_in_app_purchases(client, app_id, config, opts, report)
+    iap_ids = _sync_in_app_purchases(client, app_id, config, opts, report)
+
+    _sync_screenshots_phase(client, version_loc_ids, iap_ids, config, opts, report)
 
     return report
+
+
+def _sync_screenshots_phase(
+    client: ASCClient,
+    version_loc_ids: dict[str, str],
+    iap_ids: dict[str, str],
+    config: MetadataConfig,
+    options: SyncOptions,
+    report: SyncReport,
+) -> None:
+    has_iap_review_shots = any(iap.review_screenshot for iap in config.in_app_purchases)
+    configured_dir = options.screenshots_dir
+    if configured_dir is None and config.screenshots and config.screenshots.directory:
+        rel = Path(config.screenshots.directory)
+        if not rel.is_absolute() and config.source_path is not None:
+            configured_dir = config.source_path.parent / rel
+        else:
+            configured_dir = rel
+
+    if not options.sync_screenshots:
+        if configured_dir is not None or has_iap_review_shots:
+            report.add("SKIPPED", "screenshots", config.version, "--sync-screenshots not enabled")
+        return
+
+    from ios_appstore_sync.screenshots_sync import (
+        sync_app_screenshots,
+        sync_iap_review_screenshots,
+    )
+
+    if configured_dir is not None:
+        display_type = (
+            options.screenshot_display_type
+            or (config.screenshots.display_type if config.screenshots else None)
+            or "APP_IPHONE_69"
+        )
+        sync_app_screenshots(
+            client=client,
+            version_loc_ids=version_loc_ids,
+            screenshots_dir=configured_dir,
+            display_type=display_type,
+            dry_run=options.dry_run,
+            report=report,
+        )
+
+    if has_iap_review_shots:
+        sync_iap_review_screenshots(
+            client=client,
+            iap_ids=iap_ids,
+            config=config,
+            dry_run=options.dry_run,
+            report=report,
+        )

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import sys
 from typing import Sequence
 
 from ios_appstore_sync.asc_client import ASCAuth, ASCClient, ASCError
+from ios_appstore_sync.framer import FramingError, frame_screenshots
 from ios_appstore_sync.sync import SyncOptions, sync_metadata, write_step_summary
 from ios_appstore_sync.validator import validate_metadata_file
 
@@ -23,7 +25,7 @@ def _parse_bool_flag(value: str) -> bool:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ios-appstore-sync",
-        description="Validate and idempotently sync App Store Connect drafts from declarative JSON.",
+        description="Validate, frame screenshots, and idempotently sync App Store Connect drafts.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -41,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     # sync
     p_sync = subparsers.add_parser(
         "sync",
-        help="Sync validated metadata.json to an editable App Store Connect draft.",
+        help="Sync validated metadata.json (and optional screenshots) to an editable ASC draft.",
     )
     p_sync.add_argument(
         "--metadata",
@@ -73,6 +75,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable syncing inAppPurchases v2, localizations, and price schedules.",
     )
     p_sync.add_argument(
+        "--sync-screenshots",
+        action="store_true",
+        default=False,
+        help="Enable syncing app screenshots and IAP review screenshots.",
+    )
+    p_sync.add_argument(
+        "--screenshots-dir",
+        default=None,
+        help="Directory containing per-locale framed PNGs (overrides metadata.screenshots.directory).",
+    )
+    p_sync.add_argument(
+        "--screenshot-display-type",
+        default=None,
+        help="Override ASC screenshotDisplayType (e.g. APP_IPHONE_69 or APP_IPHONE_67).",
+    )
+    p_sync.add_argument(
         "--api-key-id",
         default=None,
         help="App Store Connect API Key ID (defaults to ASC_KEY_ID env var).",
@@ -86,6 +104,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--api-key-path",
         default=None,
         help="Path to .p8 private key file (defaults to ASC_KEY_PATH or ASC_PRIVATE_KEY env var).",
+    )
+
+    # frame
+    p_frame = subparsers.add_parser(
+        "frame",
+        help="Composite raw simulator PNGs into opaque RGB brand-framed App Store screenshots.",
+    )
+    p_frame.add_argument(
+        "--config",
+        required=True,
+        help="Path to declarative screenshots.json theme config.",
+    )
+    p_frame.add_argument(
+        "--raw-dir",
+        required=True,
+        help="Directory containing raw simulator PNGs (flat or per-locale subdirectories).",
+    )
+    p_frame.add_argument(
+        "--output-dir",
+        required=True,
+        help="Directory where framed PNGs, contact sheets, and optional web-screenshots/ are written.",
     )
 
     return parser
@@ -118,6 +157,9 @@ def _cmd_sync(args: argparse.Namespace) -> int:
             sync_availability=args.sync_availability,
             sync_pricing=args.sync_pricing,
             sync_iap=args.sync_iap,
+            sync_screenshots=args.sync_screenshots,
+            screenshots_dir=Path(args.screenshots_dir) if args.screenshots_dir else None,
+            screenshot_display_type=args.screenshot_display_type,
         )
         report = sync_metadata(client, validation.config, options)
     except ASCError as exc:
@@ -130,6 +172,27 @@ def _cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_frame(args: argparse.Namespace) -> int:
+    try:
+        result = frame_screenshots(
+            config_path=args.config,
+            raw_dir=args.raw_dir,
+            output_dir=args.output_dir,
+        )
+    except FramingError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Framed {len(result.screenshots)} screenshot(s):")
+    for shot in result.screenshots:
+        print(f"  - {shot.locale}/{shot.output_path.name}: {shot.width}x{shot.height} ({shot.mode})")
+    print(f"Contact sheet PNG:  {result.contact_sheet_png}")
+    print(f"Contact sheet HTML: {result.contact_sheet_html}")
+    if result.web_export_dir is not None:
+        print(f"Web screenshots:    {result.web_export_dir}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -137,6 +200,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _cmd_validate(args)
     if args.command == "sync":
         return _cmd_sync(args)
+    if args.command == "frame":
+        return _cmd_frame(args)
     parser.error(f"Unknown command: {args.command}")
     return 2
 

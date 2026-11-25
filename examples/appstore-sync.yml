@@ -1,9 +1,9 @@
-name: App Store Metadata Sync
+name: App Store Metadata & Screenshots Sync
 
 on:
   pull_request:
     paths:
-      - "appstore/metadata.json"
+      - "appstore/**"
       - "**.storekit"
   workflow_dispatch:
     inputs:
@@ -17,6 +17,10 @@ on:
         default: false
       sync_iap:
         description: "Sync in-app purchases"
+        type: boolean
+        default: false
+      sync_screenshots:
+        description: "Upload framed app & IAP review screenshots"
         type: boolean
         default: false
 
@@ -36,24 +40,50 @@ jobs:
           mode: validate
           metadata-path: appstore/metadata.json
 
+  frame:
+    name: Frame screenshots & build contact sheet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install CJK fonts for localized headlines
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk
+      - uses: ios-ci-apps/ios-appstore-sync@<full-40-char-commit-sha>
+        with:
+          mode: frame
+          screenshots-config-path: appstore/screenshots.json
+          raw-screenshots-dir: appstore/raw-screenshots
+          output-dir: appstore/framed-screenshots
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: framed-screenshots
+          path: appstore/framed-screenshots
+
   sync:
     name: Sync App Store Connect draft
     if: github.event_name == 'workflow_dispatch'
-    needs: [validate]
+    needs: [validate, frame]
     runs-on: ubuntu-latest
     environment: appstore-connect
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: framed-screenshots
+          path: appstore/framed-screenshots
       - uses: ios-ci-apps/ios-appstore-sync@<full-40-char-commit-sha>
         with:
           mode: sync
           metadata-path: appstore/metadata.json
+          output-dir: appstore/framed-screenshots
           dry-run: ${{ inputs.dry_run }}
           sync-availability: "true"
           sync-pricing: ${{ inputs.sync_pricing }}
           sync-iap: ${{ inputs.sync_iap }}
+          sync-screenshots: ${{ inputs.sync_screenshots }}
           api-key-id: ${{ vars.ASC_KEY_ID }}
           api-issuer-id: ${{ vars.ASC_ISSUER_ID }}
           api-private-key: ${{ secrets.ASC_PRIVATE_KEY }}
