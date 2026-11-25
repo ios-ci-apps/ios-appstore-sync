@@ -1,0 +1,59 @@
+name: App Store Metadata Sync
+
+on:
+  pull_request:
+    paths:
+      - "appstore/metadata.json"
+      - "**.storekit"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (read-only diff, zero API mutations)"
+        type: boolean
+        default: true
+      sync_pricing:
+        description: "Sync app price schedule"
+        type: boolean
+        default: false
+      sync_iap:
+        description: "Sync in-app purchases"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: ios-ci-apps/ios-appstore-sync@<full-40-char-commit-sha>
+        with:
+          mode: validate
+          metadata-path: appstore/metadata.json
+
+  sync:
+    name: Sync App Store Connect draft
+    if: github.event_name == 'workflow_dispatch'
+    needs: [validate]
+    runs-on: ubuntu-latest
+    environment: appstore-connect
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: ios-ci-apps/ios-appstore-sync@<full-40-char-commit-sha>
+        with:
+          mode: sync
+          metadata-path: appstore/metadata.json
+          dry-run: ${{ inputs.dry_run }}
+          sync-availability: "true"
+          sync-pricing: ${{ inputs.sync_pricing }}
+          sync-iap: ${{ inputs.sync_iap }}
+          api-key-id: ${{ vars.ASC_KEY_ID }}
+          api-issuer-id: ${{ vars.ASC_ISSUER_ID }}
+          api-private-key: ${{ secrets.ASC_PRIVATE_KEY }}
