@@ -174,7 +174,15 @@ def _cmd_sync(args: argparse.Namespace) -> int:
         screenshots_dir=Path(args.screenshots_dir) if args.screenshots_dir else None,
         screenshot_display_type=args.screenshot_display_type,
     )
-    report = sync_metadata(client, validation.config, options)
+    try:
+        report = sync_metadata(client, validation.config, options)
+    except Exception as exc:
+        partial_report = getattr(exc, "partial_report", None)
+        if partial_report is not None:
+            partial_md = partial_report.format_markdown(error=str(exc))
+            print(partial_md)
+            write_step_summary(partial_md)
+        raise
 
     markdown = report.format_markdown()
     print(markdown)

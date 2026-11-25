@@ -197,6 +197,48 @@ def test_delete_and_put_chunk_retry_5xx() -> None:
     assert sleeps == [0.5, 0.5]
 
 
+def test_delete_retry_404_treated_as_success() -> None:
+    pem, _ = _generate_ec_keypair()
+    auth = ASCAuth("KEY1", "ISS1", pem)
+
+    # 1. DELETE returning 503 then 404 succeeds idempotently
+    resps_5xx = [HTTPResponse(503, {}, b""), HTTPResponse(404, {}, b'{"errors":[{"code":"NOT_FOUND"}]}')]
+    sleeps: list[float] = []
+
+    def transport_5xx(_m: str, _u: str, _h: dict, _b: bytes | None, _t: float) -> HTTPResponse:
+        return resps_5xx.pop(0)
+
+    client_5xx = ASCClient(auth, transport=transport_5xx, sleep_fn=sleeps.append, max_retries=2, base_backoff=0.5)
+    assert client_5xx.delete("/v1/appScreenshots/s1") is None
+    assert sleeps == [0.5]
+
+    # 2. DELETE raising TimeoutError then returning 404 succeeds idempotently
+    events_timeout: list[Any] = [TimeoutError("timed out"), HTTPResponse(404, {}, b"")]
+    sleeps_timeout: list[float] = []
+
+    def transport_timeout(_m: str, _u: str, _h: dict, _b: bytes | None, _t: float) -> HTTPResponse:
+        ev = events_timeout.pop(0)
+        if isinstance(ev, Exception):
+            raise ev
+        return ev
+
+    client_timeout = ASCClient(
+        auth, transport=transport_timeout, sleep_fn=sleeps_timeout.append, max_retries=2, base_backoff=0.25
+    )
+    assert client_timeout.delete("/v1/appScreenshots/s1") is None
+    assert sleeps_timeout == [0.25]
+
+    # 3. Initial 404 on attempt 0 still raises ASCAPIError (unless allow_404=True)
+    def transport_initial_404(_m: str, _u: str, _h: dict, _b: bytes | None, _t: float) -> HTTPResponse:
+        return HTTPResponse(404, {}, b'{"errors":[{"code":"NOT_FOUND"}]}')
+
+    client_404 = ASCClient(auth, transport=transport_initial_404, sleep_fn=lambda _: None, max_retries=2)
+    with pytest.raises(ASCAPIError) as exc_info:
+        client_404.delete("/v1/appScreenshots/missing")
+    assert exc_info.value.status == 404
+
+
+
 def test_timeout_and_urlerror_retry_on_idempotent_and_wrap_in_asc_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

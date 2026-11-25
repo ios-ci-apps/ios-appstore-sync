@@ -22,8 +22,8 @@ A reusable CLI and composite GitHub Action that validates metadata, composites b
 
 ## Field semantics (`null` / omitted vs `""`)
 
-- **Omitted or `null` fields** leave the existing value in App Store Connect untouched (no accidental destructive wipes).
-- **Explicit empty string `""`** can be set on optional fields (such as `subtitle`, `promotionalText`, `keywords`, `marketingUrl`, or `reviewDetail` notes) where App Store Connect permits clearing the field.
+- **Omitted or `null` fields cannot clear existing values:** The diff engine (`_changed_fields`) intentionally skips `None` values, so omitting a field or setting it to `null` in `metadata.json` leaves whatever is currently stored in App Store Connect untouched (preventing accidental destructive wipes).
+- **Explicit empty string `""`:** To clear an optional text field (such as `subtitle`, `promotionalText`, `keywords`, `marketingUrl`, or `reviewDetail` notes) where App Store Connect allows empty strings, pass `""` explicitly. For fields where ASC rejects empty strings (for example clearing a secondary category), clear them directly in App Store Connect.
 
 ## Quick start
 

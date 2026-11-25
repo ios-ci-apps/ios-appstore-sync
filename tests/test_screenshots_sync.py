@@ -557,6 +557,69 @@ def test_iap_review_screenshot_upload_polling_and_dry_run(tmp_path: Path) -> Non
     assert report_live.entries[0].action == "UPDATE"
 
 
+def test_iap_review_screenshot_failure_includes_deleted_old_id_recovery_info(tmp_path: Path) -> None:
+    review_png = tmp_path / "review" / "tip.png"
+    _save_png(review_png, (1024, 1024), mode="RGB", color=(120, 80, 90))
+
+    meta_path = tmp_path / "metadata.json"
+    config = parse_metadata(
+        {
+            "schemaVersion": 1,
+            "bundleId": "com.example.app",
+            "version": "1.0.0",
+            "primaryLocale": "en-US",
+            "localizations": {"en-US": {"name": "App", "description": "Desc"}},
+            "inAppPurchases": [
+                {
+                    "productId": "com.example.tip",
+                    "referenceName": "Small Tip",
+                    "type": "CONSUMABLE",
+                    "reviewScreenshot": "review/tip.png",
+                    "localizations": {
+                        "en-US": {"name": "Small Tip", "description": "Support the app."}
+                    },
+                }
+            ],
+        },
+        source_path=meta_path,
+    )
+
+    server = MockUploadServer(
+        existing_iap_review_shot={
+            "iap-1": {"id": "iap-shot-old-9", "attributes": {"sourceFileChecksum": "stale000"}}
+        },
+        delivery_states_by_filename={
+            "tip.png": [
+                {"state": "FAILED", "errors": [{"description": "Invalid screenshot dimensions"}]}
+            ],
+        },
+    )
+    client = ASCClient(_dummy_auth(), read_only=False, transport=server.transport)
+    report = SyncReport(bundle_id="com.example.app", version="1.0.0", dry_run=False)
+
+    with pytest.raises(ASCError) as exc_info:
+        sync_iap_review_screenshots(
+            client=client,
+            iap_ids={"com.example.tip": "iap-1"},
+            config=config,
+            dry_run=False,
+            report=report,
+            poll_interval=0.0,
+            sleep_fn=lambda _: None,
+        )
+
+    msg = str(exc_info.value)
+    assert "Invalid screenshot dimensions" in msg
+    assert "iap_id='iap-1'" in msg
+    assert "product_id='com.example.tip'" in msg
+    assert "deleted_old_screenshot_id='iap-shot-old-9'" in msg
+    assert "newly_uploaded_id=" in msg
+    assert "failed_file='com.example.tip/tip.png'" in msg
+    assert ("DELETE", "/v1/inAppPurchaseAppStoreReviewScreenshots/iap-shot-old-9") in [
+        (m, p) for m, p, _ in server.api_calls
+    ]
+
+
 def test_path_containment_blocks_traversal_and_escaping_symlinks(tmp_path: Path) -> None:
     appstore_dir = tmp_path / "appstore"
     outside_dir = tmp_path / "outside"

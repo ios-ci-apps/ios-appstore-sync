@@ -97,8 +97,10 @@ class SyncReport:
             result[entry.action] = result.get(entry.action, 0) + 1
         return result
 
-    def format_markdown(self) -> str:
+    def format_markdown(self, *, error: str | None = None) -> str:
         mode = "DRY RUN (no changes written)" if self.dry_run else "LIVE SYNC"
+        if error is not None:
+            mode = f"{mode} — FAILED MID-SYNC"
         counts = self.counts()
         summary_line = (
             f"- **Summary:** {counts['CREATE']} create, {counts['UPDATE']} update, "
@@ -134,6 +136,8 @@ class SyncReport:
             lines.extend(["", "### Warnings", ""])
             for warning in self.warnings:
                 lines.append(f"- {warning}")
+        if error is not None:
+            lines.extend(["", "### Error", "", error])
         return "\n".join(lines) + "\n"
 
 
@@ -1091,6 +1095,25 @@ def _sync_in_app_purchases(
     return iap_ids
 
 
+def _preflight_live_guard(
+    live_guard: _LiveAppGuard,
+    config: MetadataConfig,
+    options: SyncOptions,
+) -> None:
+    """Fail fast before any draft writes when live-affecting sync options target a live app."""
+    if options.dry_run or options.allow_live_changes:
+        return
+    requested: list[str] = []
+    if options.sync_availability and config.availability is not None:
+        requested.append("availability")
+    if options.sync_pricing and config.app_pricing is not None:
+        requested.append("appPricing")
+    if options.sync_iap and any(iap.pricing is not None for iap in config.in_app_purchases):
+        requested.append("inAppPurchasePricing")
+    if requested:
+        live_guard.ensure_allowed("live-app-settings", ", ".join(requested))
+
+
 def sync_metadata(
     client: ASCClient,
     config: MetadataConfig,
@@ -1109,25 +1132,30 @@ def sync_metadata(
         dry_run=opts.dry_run,
     )
 
-    app = _resolve_app(client, config.bundle_id)
-    app_id = str(app["id"])
-    live_guard = _LiveAppGuard(client, app_id, opts)
+    try:
+        app = _resolve_app(client, config.bundle_id)
+        app_id = str(app["id"])
+        live_guard = _LiveAppGuard(client, app_id, opts)
+        _preflight_live_guard(live_guard, config, opts)
 
-    version_id, version_attrs = _resolve_or_create_version(client, app_id, config, opts, report)
-    _sync_copyright(client, version_id, version_attrs, config, opts, report)
+        version_id, version_attrs = _resolve_or_create_version(client, app_id, config, opts, report)
+        _sync_copyright(client, version_id, version_attrs, config, opts, report)
 
-    app_info = _resolve_editable_app_info(client, app_id)
-    app_info_id = str(app_info["id"])
-    _sync_categories(client, app_info, config, opts, report)
-    _sync_app_info_localizations(client, app_info_id, config, opts, report)
+        app_info = _resolve_editable_app_info(client, app_id)
+        app_info_id = str(app_info["id"])
+        _sync_categories(client, app_info, config, opts, report)
+        _sync_app_info_localizations(client, app_info_id, config, opts, report)
 
-    version_loc_ids = _sync_version_localizations(client, version_id, config, opts, report)
-    _sync_review_detail(client, version_id, config.review_detail, opts, report)
-    _sync_availability(client, app_id, config.availability, opts, report, live_guard)
-    _sync_app_pricing(client, app_id, config.app_pricing, opts, report, live_guard)
-    iap_ids = _sync_in_app_purchases(client, app_id, config, opts, report, live_guard)
+        version_loc_ids = _sync_version_localizations(client, version_id, config, opts, report)
+        _sync_review_detail(client, version_id, config.review_detail, opts, report)
+        _sync_availability(client, app_id, config.availability, opts, report, live_guard)
+        _sync_app_pricing(client, app_id, config.app_pricing, opts, report, live_guard)
+        iap_ids = _sync_in_app_purchases(client, app_id, config, opts, report, live_guard)
 
-    _sync_screenshots_phase(client, version_loc_ids, iap_ids, config, opts, report)
+        _sync_screenshots_phase(client, version_loc_ids, iap_ids, config, opts, report)
+    except Exception as exc:
+        exc.partial_report = report  # type: ignore[attr-defined]
+        raise
 
     return report
 

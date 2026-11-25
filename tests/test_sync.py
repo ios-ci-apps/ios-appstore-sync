@@ -518,85 +518,134 @@ def test_live_app_blocks_immediate_changes_without_allow_live_changes(
     assert live_state in str(exc_info.value)
     assert "--allow-live-changes" in str(exc_info.value)
 
-    # Zero live-affecting POSTs were issued
+    # Zero mutating requests of any kind (draft or live) were issued before preflight refused
+    assert not any(r.method in {"POST", "PATCH", "PUT", "DELETE"} for r in server.requests)
+
+    # Re-running with allow_live_changes=True succeeds and issues the live POST
     live_post_paths = {
         "/v2/appAvailabilities",
         "/v1/appPriceSchedules",
         "/v1/inAppPurchasePriceSchedules",
     }
-    assert not any(r.method == "POST" and r.path in live_post_paths for r in server.requests)
-
-    # Re-running with allow_live_changes=True succeeds and issues the POST
     report = sync_metadata(client, config, opts, allow_live_changes=True)
     assert report.counts()["CREATE"] > 0
     assert any(r.method == "POST" and r.path in live_post_paths for r in server.requests)
 
 
-def test_live_app_allows_sync_when_live_resources_are_unchanged() -> None:
-    server = MockASCServer(
-        extra_versions=[
-            {
-                "id": "ver-live",
-                "type": "appStoreVersions",
-                "attributes": {"versionString": "0.9.0", "appVersionState": "READY_FOR_SALE"},
-            }
-        ],
-        availability_v2={
-            "data": {
-                "id": "avail-1",
-                "type": "appAvailabilities",
-                "attributes": {"availableInNewTerritories": True},
-            }
-        },
-        territory_availability_pages=[
-            {
-                "data": [
-                    {
-                        "id": f"ta-{code}",
-                        "type": "territoryAvailabilities",
-                        "attributes": {"available": True},
-                        "relationships": {"territory": {"data": {"type": "territories", "id": code}}},
-                    }
-                    for code in ("USA", "AUS", "TWN")
-                ]
-            }
-        ],
-        app_price_points=[{"id": "pp-free", "attributes": {"customerPrice": "0.0"}}],
-        app_price_schedule={
-            "data": {
-                "id": "sched-1",
-                "relationships": {"baseTerritory": {"data": {"type": "territories", "id": "USA"}}},
-            },
-            "included": [
+def test_live_app_allows_draft_sync_without_live_flags_and_blocks_live_flags_preflight() -> None:
+    def _make_live_server() -> MockASCServer:
+        return MockASCServer(
+            extra_versions=[
                 {
-                    "id": "ap-1",
-                    "type": "appPrices",
-                    "relationships": {"appPricePoint": {"data": {"type": "appPricePoints", "id": "pp-free"}}},
+                    "id": "ver-live",
+                    "type": "appStoreVersions",
+                    "attributes": {"versionString": "0.9.0", "appVersionState": "READY_FOR_SALE"},
                 }
             ],
-        },
-    )
-    client = ASCClient(_dummy_auth(), read_only=False, transport=server.transport)
+            availability_v2={
+                "data": {
+                    "id": "avail-1",
+                    "type": "appAvailabilities",
+                    "attributes": {"availableInNewTerritories": True},
+                }
+            },
+            territory_availability_pages=[
+                {
+                    "data": [
+                        {
+                            "id": f"ta-{code}",
+                            "type": "territoryAvailabilities",
+                            "attributes": {"available": True},
+                            "relationships": {
+                                "territory": {"data": {"type": "territories", "id": code}}
+                            },
+                        }
+                        for code in ("USA", "AUS", "TWN")
+                    ]
+                }
+            ],
+            app_price_points=[{"id": "pp-free", "attributes": {"customerPrice": "0.0"}}],
+            app_price_schedule={
+                "data": {
+                    "id": "sched-1",
+                    "relationships": {
+                        "baseTerritory": {"data": {"type": "territories", "id": "USA"}}
+                    },
+                },
+                "included": [
+                    {
+                        "id": "ap-1",
+                        "type": "appPrices",
+                        "relationships": {
+                            "appPricePoint": {"data": {"type": "appPricePoints", "id": "pp-free"}}
+                        },
+                    }
+                ],
+            },
+        )
+
+    # 1. Draft-only sync on a live app succeeds without --allow-live-changes
+    server_draft = _make_live_server()
+    client_draft = ASCClient(_dummy_auth(), read_only=False, transport=server_draft.transport)
     config = parse_metadata(_sample_config())
 
     report = sync_metadata(
-        client,
+        client_draft,
         config,
         SyncOptions(
             dry_run=False,
-            sync_availability=True,
-            sync_pricing=True,
+            sync_availability=False,
+            sync_pricing=False,
             sync_iap=False,
             allow_live_changes=False,
         ),
     )
     actions = {(e.resource, e.target): e.action for e in report.entries}
-    assert actions[("appAvailability", "app-1")] == "UNCHANGED"
-    assert actions[("appPriceSchedule", "app-1")] == "UNCHANGED"
+    assert actions[("appAvailability", "app-1")] == "SKIPPED"
+    assert actions[("appPriceSchedule", "app-1")] == "SKIPPED"
     assert not any(
         r.method == "POST" and r.path in {"/v2/appAvailabilities", "/v1/appPriceSchedules"}
-        for r in server.requests
+        for r in server_draft.requests
     )
+
+    # 2. IAP sync without pricing on a live app also succeeds without --allow-live-changes
+    raw_no_iap_pricing = _sample_config()
+    for iap in raw_no_iap_pricing["inAppPurchases"]:
+        iap.pop("pricing", None)
+    server_iap_no_price = _make_live_server()
+    client_iap_no_price = ASCClient(
+        _dummy_auth(), read_only=False, transport=server_iap_no_price.transport
+    )
+    iap_report = sync_metadata(
+        client_iap_no_price,
+        parse_metadata(raw_no_iap_pricing),
+        SyncOptions(
+            dry_run=False,
+            sync_availability=False,
+            sync_pricing=False,
+            sync_iap=True,
+            allow_live_changes=False,
+        ),
+    )
+    assert iap_report.counts()["CREATE"] > 0
+
+    # 3. Enabling live flags without --allow-live-changes fails preflight with zero mutations
+    server_blocked = _make_live_server()
+    client_blocked = ASCClient(_dummy_auth(), read_only=False, transport=server_blocked.transport)
+    with pytest.raises(LiveAppChangeError, match="--allow-live-changes"):
+        sync_metadata(
+            client_blocked,
+            config,
+            SyncOptions(
+                dry_run=False,
+                sync_availability=True,
+                sync_pricing=True,
+                sync_iap=False,
+                allow_live_changes=False,
+            ),
+        )
+    assert not any(r.method in {"POST", "PATCH", "PUT", "DELETE"} for r in server_blocked.requests)
+
 
 
 def test_availability_two_step_paginated_over_50_territories_is_idempotent() -> None:
@@ -920,3 +969,52 @@ def test_action_and_example_workflow_inputs_consistent() -> None:
     sync_step = next(s for s in sync_steps if str(s.get("uses", "")).startswith("ios-ci-apps/ios-appstore-sync"))
     assert sync_step["with"]["sync-availability"] == "${{ inputs.sync_availability }}"
     assert sync_step["with"]["allow-live-changes"] == "${{ inputs.allow_live_changes }}"
+
+
+def test_cli_sync_emits_partial_report_and_step_summary_on_mid_sync_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    meta_path = tmp_path / "metadata.json"
+    meta_path.write_text(json.dumps(_sample_config()), encoding="utf-8")
+    summary_path = tmp_path / "step-summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+
+    server = MockASCServer(version_exists=True)
+
+    def failing_transport(
+        method: str, url: str, headers: dict[str, str], body: bytes | None, timeout: float
+    ) -> HTTPResponse:
+        if urlparse(url).path == "/v1/apps/app-1/appInfos":
+            return HTTPResponse(
+                500,
+                {},
+                json.dumps({"errors": [{"code": "SERVER_ERROR", "detail": "boom mid-sync"}]}).encode(
+                    "utf-8"
+                ),
+            )
+        return server.transport(method, url, headers, body, timeout)
+
+    monkeypatch.setattr("ios_appstore_sync.cli.ASCAuth.from_env", lambda **_kw: _dummy_auth())
+    monkeypatch.setattr(
+        "ios_appstore_sync.cli.ASCClient",
+        lambda auth, read_only=False: ASCClient(
+            auth=auth, read_only=read_only, transport=failing_transport, max_retries=0
+        ),
+    )
+
+    rc = cli_main(["sync", "--metadata", str(meta_path)])
+    assert rc == 1
+
+    captured = capsys.readouterr()
+    assert "FAILED MID-SYNC" in captured.out
+    assert "appStoreVersion.copyright" in captured.out
+    assert "### Error" in captured.out
+    assert "boom mid-sync" in captured.out
+    assert "ERROR:" in captured.err
+    assert "boom mid-sync" in captured.err
+
+    summary_text = summary_path.read_text(encoding="utf-8")
+    assert "FAILED MID-SYNC" in summary_text
+    assert "appStoreVersion.copyright" in summary_text
+    assert "### Error" in summary_text
+    assert "boom mid-sync" in summary_text

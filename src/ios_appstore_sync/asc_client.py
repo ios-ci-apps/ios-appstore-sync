@@ -324,7 +324,7 @@ class ASCClient:
                     raise
                 raise ASCTransportError(f"Transport error during {method_upper} {url}: {exc}") from exc
 
-            if resp.status == 404 and allow_404:
+            if resp.status == 404 and (allow_404 or (method_upper == "DELETE" and attempt > 0)):
                 return None
 
             if 200 <= resp.status < 300:

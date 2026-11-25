@@ -537,53 +537,66 @@ def sync_iap_review_screenshots(
             )
             continue
 
+        deleted_old_id: str | None = None
         if isinstance(existing_data, dict) and existing_data.get("id"):
-            client.delete(f"/v1/inAppPurchaseAppStoreReviewScreenshots/{existing_data['id']}")
+            deleted_old_id = str(existing_data["id"])
+            client.delete(f"/v1/inAppPurchaseAppStoreReviewScreenshots/{deleted_old_id}")
 
-        data = local_shot.path.read_bytes()
-        reserved = client.post(
-            "/v1/inAppPurchaseAppStoreReviewScreenshots",
-            {
-                "data": {
-                    "type": "inAppPurchaseAppStoreReviewScreenshots",
-                    "attributes": {
-                        "fileName": local_shot.file_name,
-                        "fileSize": local_shot.file_size,
-                    },
-                    "relationships": {
-                        "inAppPurchaseV2": {
-                            "data": {"type": "inAppPurchases", "id": iap_id}
-                        }
-                    },
-                }
-            },
-        )
-        shot_data = reserved.get("data") or {}
-        shot_id = str(shot_data["id"])
-        upload_ops = (shot_data.get("attributes") or {}).get("uploadOperations") or []
-        _execute_upload_operations(client, data, upload_ops)
-        client.patch(
-            f"/v1/inAppPurchaseAppStoreReviewScreenshots/{shot_id}",
-            {
-                "data": {
-                    "type": "inAppPurchaseAppStoreReviewScreenshots",
-                    "id": shot_id,
-                    "attributes": {
-                        "uploaded": True,
-                        "sourceFileChecksum": local_shot.md5,
-                    },
-                }
-            },
-        )
-        _wait_for_asset_delivery(
-            client,
-            f"/v1/inAppPurchaseAppStoreReviewScreenshots/{shot_id}",
-            file_label=f"{iap.product_id}/{local_shot.file_name}",
-            poll_interval=poll_interval,
-            poll_timeout=poll_timeout,
-            sleep_fn=sleep_fn,
-            monotonic_fn=monotonic_fn,
-        )
+        file_label = f"{iap.product_id}/{local_shot.file_name}"
+        reserved_id: str | None = None
+        try:
+            data = local_shot.path.read_bytes()
+            reserved = client.post(
+                "/v1/inAppPurchaseAppStoreReviewScreenshots",
+                {
+                    "data": {
+                        "type": "inAppPurchaseAppStoreReviewScreenshots",
+                        "attributes": {
+                            "fileName": local_shot.file_name,
+                            "fileSize": local_shot.file_size,
+                        },
+                        "relationships": {
+                            "inAppPurchaseV2": {
+                                "data": {"type": "inAppPurchases", "id": iap_id}
+                            }
+                        },
+                    }
+                },
+            )
+            shot_data = reserved.get("data") or {}
+            reserved_id = str(shot_data["id"])
+            upload_ops = (shot_data.get("attributes") or {}).get("uploadOperations") or []
+            _execute_upload_operations(client, data, upload_ops)
+            client.patch(
+                f"/v1/inAppPurchaseAppStoreReviewScreenshots/{reserved_id}",
+                {
+                    "data": {
+                        "type": "inAppPurchaseAppStoreReviewScreenshots",
+                        "id": reserved_id,
+                        "attributes": {
+                            "uploaded": True,
+                            "sourceFileChecksum": local_shot.md5,
+                        },
+                    }
+                },
+            )
+            _wait_for_asset_delivery(
+                client,
+                f"/v1/inAppPurchaseAppStoreReviewScreenshots/{reserved_id}",
+                file_label=file_label,
+                poll_interval=poll_interval,
+                poll_timeout=poll_timeout,
+                sleep_fn=sleep_fn,
+                monotonic_fn=monotonic_fn,
+            )
+        except Exception as exc:
+            raise ASCError(
+                f"IAP review screenshot upload/processing failed mid-sync: {exc}. "
+                f"Recovery state: iap_id={iap_id!r}, product_id={iap.product_id!r}, "
+                f"deleted_old_screenshot_id={deleted_old_id!r}, "
+                f"newly_uploaded_id={reserved_id!r}, failed_file={file_label!r}."
+            ) from exc
+
         report.add(
             action,
             "inAppPurchaseReviewScreenshot",
