@@ -59,25 +59,33 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+        # Honor any pinned Python already on PATH (e.g. setup-python or uv) before falling back to Homebrew.
+        export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
         python_bin=""
-        for candidate in python3.14 python3.13 python3.12 python3.11 python3; do
+        for candidate in python3.12 python3.13 python3.14 python3; do
           if command -v "$candidate" >/dev/null 2>&1; then
-            if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+            if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' >/dev/null 2>&1; then
               python_bin="$(command -v "$candidate")"
               break
             fi
           fi
         done
         if [[ -z "$python_bin" ]]; then
-          echo "::error::Python 3.11+ is required (checked python3.14, python3.13, python3.12, python3.11, python3)."
+          echo "::error::Python 3.12+ is required (checked python3.12, python3.13, python3.14, python3)."
           exit 1
         fi
         venv_dir="${RUNNER_TEMP:-/tmp}/ios-appstore-sync-venv"
-        if [[ ! -x "$venv_dir/bin/ios-appstore-sync" ]]; then
+        sentinel="$venv_dir/.locked-ready"
+        if [[ ! -f "$sentinel" ]]; then
           "$python_bin" -m venv "$venv_dir"
-          "$venv_dir/bin/pip" install --quiet --upgrade pip
-          "$venv_dir/bin/pip" install --quiet "$GITHUB_ACTION_PATH"
+          "$venv_dir/bin/pip" install \
+            --quiet \
+            --disable-pip-version-check \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            -r "$GITHUB_ACTION_PATH/requirements.lock"
+          touch "$sentinel"
         fi
 
     - name: Run ios-appstore-sync
@@ -101,7 +109,8 @@ runs:
         ASC_KEY_PATH: ${{ inputs.api-key-path }}
       run: |
         set -euo pipefail
-        cli="${RUNNER_TEMP:-/tmp}/ios-appstore-sync-venv/bin/ios-appstore-sync"
+        py="${RUNNER_TEMP:-/tmp}/ios-appstore-sync-venv/bin/python"
+        export PYTHONPATH="$GITHUB_ACTION_PATH/src"
 
         is_true() {
           [[ "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" == "true" ]]
@@ -111,14 +120,14 @@ runs:
           validate)
             unset ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY ASC_KEY_PATH
             [[ -n "$INPUT_METADATA_PATH" ]] || { echo "::error::metadata-path is required for mode 'validate'"; exit 1; }
-            "$cli" validate --metadata "$INPUT_METADATA_PATH"
+            "$py" -m ios_appstore_sync.cli validate --metadata "$INPUT_METADATA_PATH"
             ;;
           frame)
             unset ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY ASC_KEY_PATH
             [[ -n "$INPUT_SCREENSHOTS_CONFIG_PATH" ]] || { echo "::error::screenshots-config-path is required for mode 'frame'"; exit 1; }
             [[ -n "$INPUT_RAW_SCREENSHOTS_DIR" ]] || { echo "::error::raw-screenshots-dir is required for mode 'frame'"; exit 1; }
             [[ -n "$INPUT_OUTPUT_DIR" ]] || { echo "::error::output-dir is required for mode 'frame'"; exit 1; }
-            "$cli" frame \
+            "$py" -m ios_appstore_sync.cli frame \
               --config "$INPUT_SCREENSHOTS_CONFIG_PATH" \
               --raw-dir "$INPUT_RAW_SCREENSHOTS_DIR" \
               --output-dir "$INPUT_OUTPUT_DIR"
@@ -133,7 +142,7 @@ runs:
             if is_true "$INPUT_ALLOW_LIVE_CHANGES"; then args+=(--allow-live-changes); fi
             if [[ -n "$INPUT_OUTPUT_DIR" ]]; then args+=(--screenshots-dir "$INPUT_OUTPUT_DIR"); fi
             if [[ -n "$INPUT_SCREENSHOT_DISPLAY_TYPE" ]]; then args+=(--screenshot-display-type "$INPUT_SCREENSHOT_DISPLAY_TYPE"); fi
-            "$cli" sync "${args[@]}"
+            "$py" -m ios_appstore_sync.cli sync "${args[@]}"
             ;;
           *)
             echo "::error::Unsupported mode '$INPUT_MODE'. Expected 'validate', 'frame', or 'sync'."

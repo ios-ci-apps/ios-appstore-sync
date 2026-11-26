@@ -959,6 +959,19 @@ def test_action_and_example_workflow_inputs_consistent() -> None:
     action_text = (REPO_ROOT / "action.yml").read_text(encoding="utf-8")
     # macOS runners ship /bin/bash 3.2, which rejects Bash 4+ ${VAR,,} syntax
     assert ",,}" not in action_text
+    # Supply-chain hardening (#5): hash-locked binary-only install, no runtime pip upgrade, caller PATH first
+    assert "--require-hashes" in action_text
+    assert "--no-deps" in action_text
+    assert "--only-binary=:all:" in action_text
+    assert "requirements.lock" in action_text
+    assert "--upgrade pip" not in action_text
+    assert 'export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"' in action_text
+
+    lock_text = (REPO_ROOT / "requirements.lock").read_text(encoding="utf-8")
+    for pkg in ("pyjwt==", "cryptography==", "pillow=="):
+        assert pkg in lock_text
+    assert "--hash=sha256:" in lock_text
+
     action = yaml.safe_load(action_text)
     assert action["inputs"]["allow-live-changes"]["default"] == "false"
 
