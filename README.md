@@ -93,6 +93,7 @@ export ASC_KEY_PATH="/path/to/AuthKey.p8"
 
 - Credentials are never printed, logged, or included in error messages.
 - `validate` and `frame` run completely offline and unset `ASC_*` variables before invoking the CLI.
+- `action.yml` installs runtime dependencies strictly with `pip install --no-deps --only-binary=:all: --require-hashes -r requirements.lock` (no runtime `pip` self-upgrade and no unhashed build-isolation downloads).
 - Screenshot and review-screenshot paths are strictly constrained to their configured base directory (blocking `..` traversal and escaping symlinks).
 - Pagination `links.next` URLs are restricted to `https://` on the configured ASC API host so Bearer tokens are never sent to unexpected hosts.
 - Never run `mode: sync` on `pull_request` or `pull_request_target` events. See [SECURITY.md](SECURITY.md) for details.
@@ -102,6 +103,18 @@ export ASC_KEY_PATH="/path/to/AuthKey.p8"
 ```bash
 ruff check src tests
 pytest -v
+```
+
+To refresh `requirements.lock` after updating runtime dependencies in `pyproject.toml`:
+
+```bash
+uv pip compile \
+  --universal \
+  --generate-hashes \
+  --python-version 3.12 \
+  --no-emit-package ios-appstore-sync \
+  pyproject.toml \
+  -o requirements.lock
 ```
 
 ## License
