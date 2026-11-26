@@ -956,7 +956,10 @@ def test_cli_allow_live_changes_flag_and_clean_error_handling(
 
 
 def test_action_and_example_workflow_inputs_consistent() -> None:
-    action = yaml.safe_load((REPO_ROOT / "action.yml").read_text(encoding="utf-8"))
+    action_text = (REPO_ROOT / "action.yml").read_text(encoding="utf-8")
+    # macOS runners ship /bin/bash 3.2, which rejects Bash 4+ ${VAR,,} syntax
+    assert ",,}" not in action_text
+    action = yaml.safe_load(action_text)
     assert action["inputs"]["allow-live-changes"]["default"] == "false"
 
     example_wf = yaml.safe_load((REPO_ROOT / "examples" / "appstore-sync.yml").read_text(encoding="utf-8"))

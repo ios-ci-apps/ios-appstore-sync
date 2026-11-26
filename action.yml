@@ -59,9 +59,23 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+        python_bin=""
+        for candidate in python3.14 python3.13 python3.12 python3.11 python3; do
+          if command -v "$candidate" >/dev/null 2>&1; then
+            if "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1; then
+              python_bin="$(command -v "$candidate")"
+              break
+            fi
+          fi
+        done
+        if [[ -z "$python_bin" ]]; then
+          echo "::error::Python 3.11+ is required (checked python3.14, python3.13, python3.12, python3.11, python3)."
+          exit 1
+        fi
         venv_dir="${RUNNER_TEMP:-/tmp}/ios-appstore-sync-venv"
         if [[ ! -x "$venv_dir/bin/ios-appstore-sync" ]]; then
-          python3 -m venv "$venv_dir"
+          "$python_bin" -m venv "$venv_dir"
           "$venv_dir/bin/pip" install --quiet --upgrade pip
           "$venv_dir/bin/pip" install --quiet "$GITHUB_ACTION_PATH"
         fi
@@ -89,6 +103,10 @@ runs:
         set -euo pipefail
         cli="${RUNNER_TEMP:-/tmp}/ios-appstore-sync-venv/bin/ios-appstore-sync"
 
+        is_true() {
+          [[ "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" == "true" ]]
+        }
+
         case "$INPUT_MODE" in
           validate)
             unset ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY ASC_KEY_PATH
@@ -108,13 +126,13 @@ runs:
           sync)
             [[ -n "$INPUT_METADATA_PATH" ]] || { echo "::error::metadata-path is required for mode 'sync'"; exit 1; }
             args=(--metadata "$INPUT_METADATA_PATH" --dry-run "$INPUT_DRY_RUN")
-            [[ "${INPUT_SYNC_AVAILABILITY,,}" == "true" ]] && args+=(--sync-availability)
-            [[ "${INPUT_SYNC_PRICING,,}" == "true" ]] && args+=(--sync-pricing)
-            [[ "${INPUT_SYNC_IAP,,}" == "true" ]] && args+=(--sync-iap)
-            [[ "${INPUT_SYNC_SCREENSHOTS,,}" == "true" ]] && args+=(--sync-screenshots)
-            [[ "${INPUT_ALLOW_LIVE_CHANGES,,}" == "true" ]] && args+=(--allow-live-changes)
-            [[ -n "$INPUT_OUTPUT_DIR" ]] && args+=(--screenshots-dir "$INPUT_OUTPUT_DIR")
-            [[ -n "$INPUT_SCREENSHOT_DISPLAY_TYPE" ]] && args+=(--screenshot-display-type "$INPUT_SCREENSHOT_DISPLAY_TYPE")
+            if is_true "$INPUT_SYNC_AVAILABILITY"; then args+=(--sync-availability); fi
+            if is_true "$INPUT_SYNC_PRICING"; then args+=(--sync-pricing); fi
+            if is_true "$INPUT_SYNC_IAP"; then args+=(--sync-iap); fi
+            if is_true "$INPUT_SYNC_SCREENSHOTS"; then args+=(--sync-screenshots); fi
+            if is_true "$INPUT_ALLOW_LIVE_CHANGES"; then args+=(--allow-live-changes); fi
+            if [[ -n "$INPUT_OUTPUT_DIR" ]]; then args+=(--screenshots-dir "$INPUT_OUTPUT_DIR"); fi
+            if [[ -n "$INPUT_SCREENSHOT_DISPLAY_TYPE" ]]; then args+=(--screenshot-display-type "$INPUT_SCREENSHOT_DISPLAY_TYPE"); fi
             "$cli" sync "${args[@]}"
             ;;
           *)
