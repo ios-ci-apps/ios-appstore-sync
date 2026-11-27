@@ -63,6 +63,7 @@ class MockASCServer:
     review_detail: dict[str, Any] | None = None
     availability_v2: dict[str, Any] | None = None
     territory_availability_pages: list[dict[str, Any]] = field(default_factory=list)
+    all_territories: list[str] = field(default_factory=lambda: ["USA", "AUS", "TWN", "CAN", "JPN", "DEU"])
     app_price_points: list[dict[str, Any]] = field(default_factory=list)
     app_price_schedule: dict[str, Any] | None = None
     iaps: list[dict[str, Any]] = field(default_factory=list)
@@ -230,7 +231,18 @@ class MockASCServer:
         if method == "PATCH" and path.startswith("/v1/appStoreReviewDetails/"):
             return self._json_resp(200, {"data": payload["data"]})
 
-        # Availability v2 (official two-step read)
+        # Availability v2 (official two-step read + PATCH per territory / POST full territory set)
+        if method == "GET" and path == "/v1/territories":
+            return self._json_resp(
+                200,
+                {
+                    "data": [
+                        {"id": code, "type": "territories", "attributes": {"currency": "USD"}}
+                        for code in self.all_territories
+                    ]
+                },
+            )
+
         if method == "GET" and path == "/v1/apps/app-1/appAvailabilityV2":
             if self.availability_v2 is None:
                 return self._json_resp(404, {"errors": [{"code": "NOT_FOUND"}]})
@@ -243,7 +255,22 @@ class MockASCServer:
             return self._json_resp(200, {"data": []})
 
         if method == "POST" and path == "/v2/appAvailabilities":
+            if self.availability_v2 is not None:
+                return self._json_resp(
+                    409,
+                    {
+                        "errors": [
+                            {
+                                "code": "ENTITY_ERROR.RELATIONSHIP.INVALID",
+                                "detail": "An 'appAvailabilities' with a relationship to 'apps' already exists.",
+                            }
+                        ]
+                    },
+                )
             return self._json_resp(201, {"data": {"id": "avail-new", "type": "appAvailabilities"}})
+
+        if method == "PATCH" and path.startswith("/v1/territoryAvailabilities/"):
+            return self._json_resp(200, {"data": payload["data"]})
 
         # App Pricing
         if method == "GET" and path == "/v1/apps/app-1/appPricePoints":
@@ -1034,3 +1061,170 @@ def test_cli_sync_emits_partial_report_and_step_summary_on_mid_sync_failure(
     assert "appStoreVersion.copyright" in summary_text
     assert "### Error" in summary_text
     assert "boom mid-sync" in summary_text
+
+
+def test_availability_update_patches_only_changed_territories_without_post() -> None:
+    server = MockASCServer(
+        availability_v2={
+            "data": {
+                "id": "avail-1",
+                "type": "appAvailabilities",
+                "attributes": {"availableInNewTerritories": False},
+            }
+        },
+        territory_availability_pages=[
+            {
+                "data": [
+                    {
+                        "id": f"ta-{code}",
+                        "type": "territoryAvailabilities",
+                        "attributes": {"available": code in {"USA", "AUS", "TWN"}},
+                        "relationships": {
+                            "territory": {"data": {"type": "territories", "id": code}}
+                        },
+                    }
+                    for code in ("USA", "AUS", "TWN", "CAN", "JPN")
+                ]
+            }
+        ],
+    )
+    client = ASCClient(_dummy_auth(), read_only=False, transport=server.transport)
+    raw = _sample_config(territories=["USA", "CAN", "TWN"])
+    raw["availability"]["availableInNewTerritories"] = False
+    config = parse_metadata(raw)
+
+    report = sync_metadata(
+        client,
+        config,
+        SyncOptions(dry_run=False, sync_availability=True, sync_pricing=False, sync_iap=False),
+    )
+
+    actions = {(e.resource, e.target): e.action for e in report.entries}
+    assert actions[("appAvailability", "app-1")] == "UPDATE"
+    assert not any(r.method == "POST" and r.path == "/v2/appAvailabilities" for r in server.requests)
+
+    patches = [
+        r for r in server.requests if r.method == "PATCH" and r.path.startswith("/v1/territoryAvailabilities/")
+    ]
+    assert len(patches) == 2
+    by_path = {r.path: r.body["data"]["attributes"] for r in patches}
+    assert by_path == {
+        "/v1/territoryAvailabilities/ta-CAN": {"available": True},
+        "/v1/territoryAvailabilities/ta-AUS": {"available": False},
+    }
+    assert not report.warnings
+
+
+def test_availability_update_warns_on_available_in_new_territories_mismatch() -> None:
+    server = MockASCServer(
+        availability_v2={
+            "data": {
+                "id": "avail-1",
+                "type": "appAvailabilities",
+                "attributes": {"availableInNewTerritories": True},
+            }
+        },
+        territory_availability_pages=[
+            {
+                "data": [
+                    {
+                        "id": f"ta-{code}",
+                        "type": "territoryAvailabilities",
+                        "attributes": {"available": code in {"USA", "AUS", "TWN"}},
+                        "relationships": {
+                            "territory": {"data": {"type": "territories", "id": code}}
+                        },
+                    }
+                    for code in ("USA", "AUS", "TWN", "CAN")
+                ]
+            }
+        ],
+    )
+    client = ASCClient(_dummy_auth(), read_only=False, transport=server.transport)
+    raw = _sample_config(territories=["USA", "AUS", "TWN"])
+    raw["availability"]["availableInNewTerritories"] = False
+    config = parse_metadata(raw)
+
+    report = sync_metadata(
+        client,
+        config,
+        SyncOptions(dry_run=False, sync_availability=True, sync_pricing=False, sync_iap=False),
+    )
+
+    actions = {(e.resource, e.target): e.action for e in report.entries}
+    assert actions[("appAvailability", "app-1")] == "UNCHANGED"
+    assert not any(r.method == "POST" and r.path == "/v2/appAvailabilities" for r in server.requests)
+    assert not any(r.method == "PATCH" and r.path.startswith("/v1/territoryAvailabilities/") for r in server.requests)
+    assert any("availableInNewTerritories" in w for w in report.warnings)
+
+
+def test_availability_create_includes_all_territories_with_true_and_false() -> None:
+    server = MockASCServer(
+        availability_v2=None,
+        all_territories=["USA", "AUS", "TWN", "CAN", "JPN"],
+    )
+    client = ASCClient(_dummy_auth(), read_only=False, transport=server.transport)
+    raw = _sample_config(territories=["USA", "AUS", "TWN"])
+    raw["availability"]["availableInNewTerritories"] = False
+    config = parse_metadata(raw)
+
+    report = sync_metadata(
+        client,
+        config,
+        SyncOptions(dry_run=False, sync_availability=True, sync_pricing=False, sync_iap=False),
+    )
+
+    actions = {(e.resource, e.target): e.action for e in report.entries}
+    assert actions[("appAvailability", "app-1")] == "CREATE"
+
+    posts = [r for r in server.requests if r.method == "POST" and r.path == "/v2/appAvailabilities"]
+    assert len(posts) == 1
+    included = posts[0].body["included"]
+    by_code = {
+        item["relationships"]["territory"]["data"]["id"]: item["attributes"]["available"]
+        for item in included
+    }
+    assert by_code == {
+        "AUS": True,
+        "CAN": False,
+        "JPN": False,
+        "TWN": True,
+        "USA": True,
+    }
+
+
+def test_availability_rejects_unknown_territory_code() -> None:
+    server = MockASCServer(
+        availability_v2={
+            "data": {
+                "id": "avail-1",
+                "type": "appAvailabilities",
+                "attributes": {"availableInNewTerritories": False},
+            }
+        },
+        territory_availability_pages=[
+            {
+                "data": [
+                    {
+                        "id": "ta-USA",
+                        "type": "territoryAvailabilities",
+                        "attributes": {"available": True},
+                        "relationships": {
+                            "territory": {"data": {"type": "territories", "id": "USA"}}
+                        },
+                    }
+                ]
+            }
+        ],
+    )
+    client = ASCClient(_dummy_auth(), read_only=False, transport=server.transport)
+    raw = _sample_config(territories=["USA", "CAD"])
+    raw["availability"]["availableInNewTerritories"] = False
+    config = parse_metadata(raw)
+
+    with pytest.raises(ASCError, match="CAD"):
+        sync_metadata(
+            client,
+            config,
+            SyncOptions(dry_run=False, sync_availability=True, sync_pricing=False, sync_iap=False),
+        )

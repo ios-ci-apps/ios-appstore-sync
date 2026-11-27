@@ -648,6 +648,7 @@ def _sync_availability(
     has_existing = bool(current and isinstance(current.get("data"), dict))
     cur_new: bool | None = None
     cur_territories: set[str] = set()
+    terr_to_record: dict[str, tuple[str, bool]] = {}
     if has_existing and current is not None:
         avail_data = current["data"]
         avail_id = avail_data.get("id")
@@ -666,41 +667,131 @@ def _sync_availability(
             }
             for item in terr_items:
                 attrs = item.get("attributes") or {}
-                if not attrs.get("available"):
-                    continue
+                is_available = bool(attrs.get("available"))
+                ta_id = str(item.get("id") or "")
                 rel_terr = ((item.get("relationships") or {}).get("territory") or {}).get("data") or {}
                 tid = rel_terr.get("id")
+                code: str | None = None
                 if tid:
                     tid_str = str(tid)
                     inc_rec = included_territories.get(tid_str)
-                    cur_territories.add(str(inc_rec["id"]) if inc_rec and inc_rec.get("id") else tid_str)
-                elif item.get("id") and str(item["id"]) in included_territories:
-                    cur_territories.add(str(item["id"]))
+                    code = str(inc_rec["id"]) if inc_rec and inc_rec.get("id") else tid_str
+                elif ta_id and ta_id in included_territories:
+                    code = ta_id
+                if code:
+                    if ta_id:
+                        terr_to_record[code] = (ta_id, is_available)
+                    if is_available:
+                        cur_territories.add(code)
 
     desired_territories = set(availability.territories)
     terr_summary = _format_territories_summary(desired_territories)
-    if cur_new == availability.available_in_new_territories and cur_territories == desired_territories:
+
+    if has_existing:
+        to_enable = sorted(desired_territories - cur_territories)
+        to_disable = sorted(cur_territories - desired_territories)
+        new_terr_changed = (
+            cur_new is not None and cur_new != availability.available_in_new_territories
+        )
+
+        if not to_enable and not to_disable and not new_terr_changed:
+            report.add(
+                "UNCHANGED",
+                "appAvailability",
+                app_id,
+                f"territories={terr_summary}",
+            )
+            return
+
+        if new_terr_changed:
+            report.add_warning(
+                f"appAvailability ({app_id}): App Store Connect API v2 has no PATCH endpoint "
+                f"for availableInNewTerritories ({cur_new} -> {availability.available_in_new_territories}); "
+                "update that toggle manually in App Store Connect → Pricing and Availability."
+            )
+
+        if not to_enable and not to_disable:
+            report.add(
+                "UNCHANGED",
+                "appAvailability",
+                app_id,
+                f"territories={terr_summary} (availableInNewTerritories unchanged via API)",
+            )
+            return
+
+        missing_codes = sorted(code for code in to_enable + to_disable if code not in terr_to_record)
+        if missing_codes:
+            raise ASCError(
+                f"Unknown territory code(s) not found in appAvailabilityV2 for app '{app_id}': "
+                f"{', '.join(missing_codes)}."
+            )
+
+        if not options.dry_run:
+            live_guard.ensure_allowed("appAvailability", app_id)
+            for code in to_enable:
+                ta_id, _ = terr_to_record[code]
+                client.patch(
+                    f"/v1/territoryAvailabilities/{ta_id}",
+                    {
+                        "data": {
+                            "type": "territoryAvailabilities",
+                            "id": ta_id,
+                            "attributes": {"available": True},
+                        }
+                    },
+                )
+            for code in to_disable:
+                ta_id, _ = terr_to_record[code]
+                client.patch(
+                    f"/v1/territoryAvailabilities/{ta_id}",
+                    {
+                        "data": {
+                            "type": "territoryAvailabilities",
+                            "id": ta_id,
+                            "attributes": {"available": False},
+                        }
+                    },
+                )
+
+        delta_parts: list[str] = []
+        if to_enable:
+            delta_parts.append(f"enable={_format_territories_summary(set(to_enable))}")
+        if to_disable:
+            delta_parts.append(f"disable={_format_territories_summary(set(to_disable))}")
+        delta_parts.append(f"territories={terr_summary}")
         report.add(
-            "UNCHANGED",
+            "UPDATE",
             "appAvailability",
             app_id,
-            f"territories={terr_summary}",
+            f"{LIVE_CHANGE_TAG} {', '.join(delta_parts)}",
         )
         return
 
-    action: DiffAction = "CREATE" if not has_existing else "UPDATE"
+    # Brand-new app with no appAvailabilityV2 yet: POST /v2/appAvailabilities requires
+    # every App Store territory to be included with available=True/False.
+    all_terrs = client.get_all("/v1/territories", params={"limit": "200"})
+    all_codes = sorted({str(t["id"]) for t in all_terrs if isinstance(t, dict) and t.get("id")})
+    if all_codes:
+        unknown = sorted(desired_territories - set(all_codes))
+        if unknown:
+            raise ASCError(
+                f"Unknown territory code(s) not returned by /v1/territories: {', '.join(unknown)}."
+            )
+    else:
+        all_codes = sorted(desired_territories)
+
     if not options.dry_run:
         live_guard.ensure_allowed("appAvailability", app_id)
         inline_refs = []
         included_items = []
-        for idx, territory in enumerate(sorted(desired_territories)):
+        for idx, territory in enumerate(all_codes):
             temp_id = f"${{territory-{idx}}}"
             inline_refs.append({"type": "territoryAvailabilities", "id": temp_id})
             included_items.append(
                 {
                     "type": "territoryAvailabilities",
                     "id": temp_id,
-                    "attributes": {"available": True},
+                    "attributes": {"available": territory in desired_territories},
                     "relationships": {
                         "territory": {"data": {"type": "territories", "id": territory}},
                     },
@@ -723,7 +814,7 @@ def _sync_availability(
             },
         )
     report.add(
-        action,
+        "CREATE",
         "appAvailability",
         app_id,
         f"{LIVE_CHANGE_TAG} newTerritories={availability.available_in_new_territories}, "
